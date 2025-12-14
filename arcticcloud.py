@@ -1,7 +1,6 @@
-# ====== 强制可观测（第一行）======
-print(">>> arcticcloud.py 已开始执行（TOP LEVEL） <<<", flush=True)
-
 # -*- coding: utf-8 -*-
+print(">>> ArcticCloud 自动续期脚本启动 <<<", flush=True)
+
 import os
 import sys
 import time
@@ -17,21 +16,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 
-print(">>> 所有 import 已完成 <<<", flush=True)
-
 # ================== 环境变量 ==================
 USERNAME = os.environ.get("ARCTIC_USERNAME")
 PASSWORD = os.environ.get("ARCTIC_PASSWORD")
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"
-
-print(
-    f">>> ENV 检测：USERNAME={'OK' if USERNAME else 'MISSING'} | "
-    f"PASSWORD={'OK' if PASSWORD else 'MISSING'} | "
-    f"HEADLESS={HEADLESS} <<<",
-    flush=True
-)
 
 WAIT_TIMEOUT = 60
 
@@ -41,11 +31,29 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-logging.info("logging 系统初始化完成")
+
+# ================== Telegram ==================
+def escape_md(text):
+    return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', text)
+
+def send_telegram(msg):
+    if not TG_BOT_TOKEN or not TG_CHAT_ID:
+        logging.warning("Telegram 未配置，跳过推送")
+        return
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+    try:
+        r = requests.post(url, data={
+            "chat_id": TG_CHAT_ID,
+            "text": escape_md(msg),
+            "parse_mode": "MarkdownV2"
+        }, timeout=15)
+        logging.info(f"Telegram 状态码：{r.status_code}")
+    except Exception as e:
+        logging.error(f"Telegram 推送异常: {e}")
 
 # ================== 浏览器 ==================
 def setup_driver():
-    logging.info("开始 setup_driver()")
+    logging.info("启动 Chrome Driver")
     options = Options()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -58,44 +66,15 @@ def setup_driver():
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
-    logging.info("Chrome Driver 启动成功")
     return driver
 
 # ================== 登录 ==================
 def login(driver):
-    logging.info("进入 login()")
+    logging.info("开始登录")
     driver.get("https://vps.polarbear.nyc.mn/index/login/?referer=")
 
     WebDriverWait(driver, WAIT_TIMEOUT).until(
         EC.presence_of_element_located((By.NAME, "swapname"))
     ).send_keys(USERNAME)
 
-    driver.find_element(By.NAME, "swappass").send_keys(PASSWORD)
-    driver.find_element(By.XPATH, "//button[contains(., '登录')]").click()
-
-    WebDriverWait(driver, WAIT_TIMEOUT).until(
-        EC.url_contains("index/index")
-    )
-    logging.info("登录成功")
-
-# ================== 主流程 ==================
-def main():
-    print(">>> main() 已进入 <<<", flush=True)
-    driver = None
-    try:
-        logging.info("启动 ArcticCloud 自动续期（MAIN）")
-        driver = setup_driver()
-        login(driver)
-        logging.info("流程走到登录之后（验证用）")
-    except Exception as e:
-        logging.error("主流程异常", exc_info=True)
-        print(f">>> 捕获到异常：{e} <<<", flush=True)
-    finally:
-        if driver:
-            driver.quit()
-        logging.info("程序结束")
-
-# ================== 程序入口 ==================
-if __name__ == "__main__":
-    print(">>> __main__ 入口命中 <<<", flush=True)
-    main()
+    driver.find_element(By.NAME, "swappass").send_keys
