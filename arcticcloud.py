@@ -13,9 +13,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 
+# ================== 环境变量 ==================
 USERNAME = os.environ.get("ARCTIC_USERNAME")
 PASSWORD = os.environ.get("ARCTIC_PASSWORD")
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
@@ -24,12 +24,14 @@ HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"
 
 WAIT_TIMEOUT = 60
 
+# ================== 日志 ==================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
+# ================== Telegram ==================
 def escape_md(text):
     return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', text)
 
@@ -43,11 +45,10 @@ def send_telegram(msg):
         "parse_mode": "MarkdownV2"
     }, timeout=15)
 
+# ================== 浏览器 ==================
 def setup_driver():
     logging.info("启动 Chrome Driver")
     options = Options()
-
-    # 稳定参数组合（关键）
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -56,12 +57,13 @@ def setup_driver():
     options.add_argument("--window-size=1920,1080")
 
     if HEADLESS:
-        # ❗不要用 headless=new
+        # ⚠️ 关键：不要用 headless=new
         options.add_argument("--headless")
 
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=options)
 
+# ================== 登录 ==================
 def login(driver):
     logging.info("开始登录")
     driver.get("https://vps.polarbear.nyc.mn/index/login/?referer=")
@@ -78,6 +80,7 @@ def login(driver):
     )
     logging.info("登录成功")
 
+# ================== 续期 ==================
 def renew_single_instance(driver):
     logging.info("进入控制台")
     driver.get("https://vps.polarbear.nyc.mn/control/index/detail/")
@@ -98,32 +101,29 @@ def renew_single_instance(driver):
         EC.presence_of_element_located((By.TAG_NAME, "body"))
     )
 
-    # ① 点击续期按钮
+    # ① 点击「续期」（JS 强制）
     renew_btn = WebDriverWait(driver, WAIT_TIMEOUT).until(
-        EC.element_to_be_clickable(
+        EC.presence_of_element_located(
             (By.XPATH, "//button[@data-target='#addcontactmodal']")
         )
     )
-    renew_btn.click()
+    driver.execute_script("arguments[0].click();", renew_btn)
     logging.info("已点击续期按钮")
 
-    # ② 等弹窗真正显示（关键）
-    WebDriverWait(driver, WAIT_TIMEOUT).until(
-        EC.visibility_of_element_located((By.ID, "addcontactmodal"))
-    )
-    time.sleep(1)
+    time.sleep(2)
 
-    # ③ 点击确认续期
+    # ② 直接找「确认续期」按钮（不等弹窗显示）
     submit_btn = WebDriverWait(driver, WAIT_TIMEOUT).until(
-        EC.element_to_be_clickable(
+        EC.presence_of_element_located(
             (By.CSS_SELECTOR, "input.install-complete")
         )
     )
 
-    try:
-        submit_btn.click()
-    except Exception:
-        driver.execute_script("arguments[0].click();", submit_btn)
+    # ③ JS 强制确认
+    driver.execute_script("""
+        arguments[0].scrollIntoView(true);
+        arguments[0].click();
+    """, submit_btn)
 
     logging.info("已确认续期")
 
@@ -136,6 +136,7 @@ def renew_single_instance(driver):
         f"✅ 自动续期完成"
     )
 
+# ================== 主程序 ==================
 def main():
     driver = None
     try:
