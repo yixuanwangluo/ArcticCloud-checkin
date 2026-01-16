@@ -128,7 +128,7 @@ def renew_single_instance(driver):
     logging.info("已确认续期")
 
     time.sleep(3)
-
+    
     send_telegram(
         f"📢 ArcticCloud 续期成功\n"
         f"———————————————\n"
