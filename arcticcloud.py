@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-print(">>> ArcticCloud 自动签到脚本启动 <<<", flush=True)
+print(">>> ArcticCloud 自动续期脚本启动 <<<", flush=True)
 
 import os
 import sys
@@ -13,6 +13,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 
 USERNAME = os.environ.get("ARCTIC_USERNAME")
@@ -21,7 +22,7 @@ TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"
 
-WAIT_TIMEOUT = 40
+WAIT_TIMEOUT = 60
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,15 +44,20 @@ def send_telegram(msg):
     }, timeout=15)
 
 def setup_driver():
+    logging.info("启动 Chrome Driver")
     options = Options()
+
+    # 稳定参数组合（关键）
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-infobars")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--window-size=1920,1080")
 
     if HEADLESS:
-        options.add_argument("--headless=new")
+        # ❗不要用 headless=new
+        options.add_argument("--headless")
 
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=options)
@@ -72,32 +78,73 @@ def login(driver):
     )
     logging.info("登录成功")
 
-def sign_only(driver):
-    logging.info("访问控制台首页（签到）")
-    driver.get("https://vps.polarbear.nyc.mn/control/index/")
+def renew_single_instance(driver):
+    logging.info("进入控制台")
+    driver.get("https://vps.polarbear.nyc.mn/control/index/detail/")
+
+    manage_btn = WebDriverWait(driver, WAIT_TIMEOUT).until(
+        EC.presence_of_element_located(
+            (By.XPATH, "//a[contains(@href,'/control/detail/')]")
+        )
+    )
+
+    instance_name = manage_btn.text.strip() or "默认实例"
+    detail_url = manage_btn.get_attribute("href")
+
+    logging.info(f"进入实例：{instance_name}")
+    driver.get(detail_url)
 
     WebDriverWait(driver, WAIT_TIMEOUT).until(
         EC.presence_of_element_located((By.TAG_NAME, "body"))
     )
 
-    time.sleep(2)
+    # ① 点击续期按钮
+    renew_btn = WebDriverWait(driver, WAIT_TIMEOUT).until(
+        EC.element_to_be_clickable(
+            (By.XPATH, "//button[@data-target='#addcontactmodal']")
+        )
+    )
+    renew_btn.click()
+    logging.info("已点击续期按钮")
+
+    # ② 等弹窗真正显示（关键）
+    WebDriverWait(driver, WAIT_TIMEOUT).until(
+        EC.visibility_of_element_located((By.ID, "addcontactmodal"))
+    )
+    time.sleep(1)
+
+    # ③ 点击确认续期
+    submit_btn = WebDriverWait(driver, WAIT_TIMEOUT).until(
+        EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, "input.install-complete")
+        )
+    )
+
+    try:
+        submit_btn.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", submit_btn)
+
+    logging.info("已确认续期")
+
+    time.sleep(3)
 
     send_telegram(
-        "✅ ArcticCloud 自动签到成功\n"
-        "———————————————\n"
-        "📌 已完成登录并刷新活跃状态"
+        f"📢 ArcticCloud 续期成功\n"
+        f"———————————————\n"
+        f"🖥 实例：{instance_name}\n"
+        f"✅ 自动续期完成"
     )
-    logging.info("签到完成")
 
 def main():
     driver = None
     try:
         driver = setup_driver()
         login(driver)
-        sign_only(driver)
+        renew_single_instance(driver)
     except Exception as e:
-        logging.error("脚本执行异常", exc_info=True)
-        send_telegram(f"❌ ArcticCloud 自动签到失败\n错误：{e}")
+        logging.error("续期异常", exc_info=True)
+        send_telegram(f"❌ ArcticCloud 自动续期失败\n错误：{e}")
     finally:
         if driver:
             driver.quit()
