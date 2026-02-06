@@ -112,12 +112,6 @@ def login(driver):
 
 # ================== 在「产品管理」里找到第一个产品行并打开详情 ==================
 def open_first_product_detail(driver):
-    """
-    站点近期常见改动：
-    - 原来详情链接可能是 /control/detail/xxx
-    - 现在产品列表里直接有「管理」「订单」按钮（见你的截图）
-    所以这里优先点击「管理」，失败再退回匹配 href。
-    """
     logging.info("进入产品管理页面")
     driver.get("https://vps.polarbear.nyc.mn/control/index/detail/")
 
@@ -183,21 +177,14 @@ def click_with_fallback(driver, elements):
     return False
 
 def renew_on_detail_page(driver):
-    """
-    站点按钮/弹窗经常换：
-    - 按钮可能叫：续期 / 续费 / Renew / 延长
-    - 弹窗确认按钮可能是 input.install-complete 或 button.btn-primary 等
-    所以这里做多套选择器兜底。
-    """
     logging.info("开始在详情页执行续期")
 
-    # ① 找到“续期/续费”入口
+    # ① 找到“续费产品”入口
     renew_btn = None
     renew_xpaths = [
-        "//button[contains(.,'续期') or contains(.,'续费') or contains(.,'Renew') or contains(.,'延长')]",
-        "//a[contains(.,'续期') or contains(.,'续费') or contains(.,'Renew') or contains(.,'延长')]",
-        "//button[contains(@data-target,'modal') and (contains(.,'续') or contains(.,'Renew'))]",
-        "//button[@data-target='#addcontactmodal']",  # 兼容旧版
+        "//button[contains(.,'续费产品') or contains(.,'Renew Product')]",
+        "//a[contains(.,'续费产品') or contains(.,'Renew Product')]",
+        "//button[contains(@data-target,'modal') and (contains(.,'续期') or contains(.,'Renew'))]",
     ]
     for xp in renew_xpaths:
         try:
@@ -208,10 +195,10 @@ def renew_on_detail_page(driver):
 
     if not renew_btn:
         dump_debug(driver, "renew_btn_not_found")
-        raise TimeoutException("找不到『续期/续费』按钮（选择器全部失效）")
+        raise TimeoutException("找不到『续费产品』按钮（选择器全部失效）")
 
     driver.execute_script("arguments[0].click();", renew_btn)
-    logging.info("已点击续期/续费入口")
+    logging.info("已点击续费产品入口")
 
     # ② 等弹窗 or 页面跳转（两条路都兼容）
     time.sleep(1)
@@ -277,7 +264,6 @@ def main():
         login(driver)
         renew_single_instance(driver)
     except Exception as e:
-        # 让错误信息更完整（你现在的 Message 为空，多半是 TimeoutException 的 str(e) 为空）
         err_text = f"{type(e).__name__}: {repr(e)}"
         logging.error("续期异常: %s", err_text, exc_info=True)
         if driver:
