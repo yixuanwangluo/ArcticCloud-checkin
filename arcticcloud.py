@@ -49,16 +49,10 @@ def send_telegram(msg: str):
             timeout=15
         )
     except Exception:
-        # 不让通知失败影响主流程
         logging.warning("Telegram 发送失败（已忽略）", exc_info=True)
 
 # ================== 调试：落盘页面和截图 ==================
 def dump_debug(driver, tag: str):
-    """
-    当站点改版导致定位失败时，留一份现场：
-    - /tmp/arcticcloud_<tag>_<time>.png
-    - /tmp/arcticcloud_<tag>_<time>.html
-    """
     try:
         ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         png = f"/tmp/arcticcloud_{tag}_{ts}.png"
@@ -82,12 +76,11 @@ def setup_driver():
     options.add_argument("--window-size=1920,1080")
 
     if HEADLESS:
-        # 兼容性更好的旧 headless
-        options.add_argument("--headless")
+        options.add_argument("--headless=new")  # 新 headless 模式更稳定
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
-    driver.set_page_load_timeout(90)
+    driver.set_page_load_timeout(120)  # 延长页面加载超时
     return driver
 
 # ================== 登录 ==================
@@ -103,38 +96,28 @@ def login(driver):
     ).send_keys(USERNAME)
 
     driver.find_element(By.NAME, "swappass").send_keys(PASSWORD)
-
-    # 登录按钮：用更宽松的定位，防止文案变化
     driver.find_element(By.XPATH, "//button[contains(., '登录') or contains(., 'Login')]").click()
-
     WebDriverWait(driver, WAIT_TIMEOUT).until(EC.url_contains("index"))
     logging.info("登录成功")
 
-# ================== 在「产品管理」里找到第一个产品行并打开详情 ==================
+# ================== 打开第一个产品详情 ==================
 def open_first_product_detail(driver):
     logging.info("进入产品管理页面")
     driver.get("https://vps.polarbear.nyc.mn/control/index/detail/")
-
-    # 等表格出现
     WebDriverWait(driver, WAIT_TIMEOUT).until(
         EC.presence_of_element_located((By.XPATH, "//table"))
     )
-
-    # 取第一行
     row = WebDriverWait(driver, WAIT_TIMEOUT).until(
         EC.presence_of_element_located((By.XPATH, "//table//tbody/tr[1]"))
     )
 
-    # 产品名（第2列通常是产品名称）
     try:
         cols = row.find_elements(By.XPATH, "./td")
         instance_name = cols[1].text.strip() if len(cols) >= 2 else ""
     except Exception:
         instance_name = ""
-
     instance_name = instance_name or "默认实例"
 
-    # ① 优先点击「管理」
     manage_candidates = [
         ".//a[normalize-space()='管理' or contains(., '管理')]",
         ".//button[normalize-space()='管理' or contains(., '管理')]",
@@ -149,7 +132,6 @@ def open_first_product_detail(driver):
         except Exception:
             pass
 
-    # ② 退而求其次：找老的 /control/detail/ 链接
     try:
         manage_link = row.find_element(By.XPATH, ".//a[contains(@href,'/control/detail/')]")
         driver.get(manage_link.get_attribute("href"))
@@ -157,29 +139,11 @@ def open_first_product_detail(driver):
         return instance_name
     except Exception as e:
         dump_debug(driver, "open_detail_failed")
-        raise RuntimeError("无法从产品列表进入详情页（站点可能又改版了）") from e
+        raise RuntimeError("无法从产品列表进入详情页（站点可能改版）") from e
 
 # ================== 续期 ==================
-def click_with_fallback(driver, elements):
-    """
-    elements: list[WebElement]
-    """
-    last_err = None
-    for el in elements:
-        try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-            driver.execute_script("arguments[0].click();", el)
-            return True
-        except Exception as e:
-            last_err = e
-    if last_err:
-        raise last_err
-    return False
-
 def renew_on_detail_page(driver):
     logging.info("开始在详情页执行续期")
-
-    # ① 找到“续费产品”入口
     renew_btn = None
     renew_xpaths = [
         "//button[contains(.,'续费产品') or contains(.,'Renew Product')]",
@@ -199,17 +163,13 @@ def renew_on_detail_page(driver):
 
     driver.execute_script("arguments[0].click();", renew_btn)
     logging.info("已点击续费产品入口")
-
-    # ② 等弹窗 or 页面跳转（两条路都兼容）
     time.sleep(1)
 
-    # ②-A：弹窗确认按钮（多套）
     confirm_selectors = [
         (By.CSS_SELECTOR, "input.install-complete"),
         (By.XPATH, "//button[contains(.,'确认') or contains(.,'确定') or contains(.,'提交') or contains(.,'续期') or contains(.,'续费')]"),
         (By.XPATH, "//input[@type='submit' and (contains(@value,'确认') or contains(@value,'确定') or contains(@value,'提交'))]"),
     ]
-
     confirm_btn = None
     for by, sel in confirm_selectors:
         try:
@@ -224,7 +184,6 @@ def renew_on_detail_page(driver):
         logging.info("已点击确认续期")
         return
 
-    # ②-B：如果不是弹窗，而是跳转到“订单/结算”页，尝试点“提交/支付/确认”
     checkout_xpaths = [
         "//button[contains(.,'提交') or contains(.,'确认') or contains(.,'下单') or contains(.,'支付')]",
         "//a[contains(.,'提交') or contains(.,'确认') or contains(.,'下单') or contains(.,'支付')]",
@@ -247,7 +206,6 @@ def renew_single_instance(driver):
     instance_name = open_first_product_detail(driver)
     WebDriverWait(driver, WAIT_TIMEOUT).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
     renew_on_detail_page(driver)
-
     time.sleep(3)
     send_telegram(
         f"📢 ArcticCloud 续期成功\n"
@@ -259,23 +217,43 @@ def renew_single_instance(driver):
 # ================== 主程序 ==================
 def main():
     driver = None
-    try:
-        driver = setup_driver()
-        login(driver)
-        renew_single_instance(driver)
-    except Exception as e:
-        err_text = f"{type(e).__name__}: {repr(e)}"
-        logging.error("续期异常: %s", err_text, exc_info=True)
-        if driver:
-            dump_debug(driver, "exception")
-        send_telegram(f"❌ ArcticCloud 自动续期失败\n错误：{err_text}")
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-        logging.info("脚本结束")
+    max_attempts = 3  # 重试次数
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logging.info(f">>> 第 {attempt} 次尝试 ArcticCloud 自动续期 <<<")
+            driver = setup_driver()
+            login(driver)
+            renew_single_instance(driver)
+            logging.info("✅ 续期成功，退出循环")
+            break
+        except TimeoutException as e:
+            logging.warning(f"⚠️ 超时异常: {e}，第 {attempt} 次尝试失败")
+            if driver:
+                dump_debug(driver, f"timeout_attempt_{attempt}")
+        except WebDriverException as e:
+            logging.warning(f"⚠️ WebDriver 异常: {e}，第 {attempt} 次尝试失败")
+            if driver:
+                dump_debug(driver, f"webdriver_attempt_{attempt}")
+        except Exception as e:
+            err_text = f"{type(e).__name__}: {repr(e)}"
+            logging.error("❌ 续期异常: %s", err_text, exc_info=True)
+            if driver:
+                dump_debug(driver, f"exception_attempt_{attempt}")
+            send_telegram(f"❌ ArcticCloud 自动续期失败\n错误：{err_text}")
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                driver = None
+
+        if attempt < max_attempts:
+            wait_sec = 5
+            logging.info(f"⏳ 等待 {wait_sec} 秒后重试...")
+            time.sleep(wait_sec)
+        else:
+            logging.error("❌ 已达到最大重试次数，自动续期失败")
 
 if __name__ == "__main__":
     main()
