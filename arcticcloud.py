@@ -68,6 +68,8 @@ def dump_debug(driver, tag: str):
 def setup_driver():
     logging.info("启动 Chrome Driver")
     options = Options()
+    options.add_argument("--ignore-certificate-errors")  # 忽略证书错误
+    options.add_argument("--allow-insecure-localhost")   # 允许访问不安全 localhost
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -75,12 +77,15 @@ def setup_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--window-size=1920,1080")
 
+    # headless 模式切换
     if HEADLESS:
-        options.add_argument("--headless=new")  # 新 headless 模式更稳定
+        options.add_argument("--headless=new")  # 新 headless 模式
+    else:
+        logging.info("⚠️ 使用非 headless 模式，便于调试")
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
-    driver.set_page_load_timeout(120)  # 延长页面加载超时
+    driver.set_page_load_timeout(120)  # 页面加载超时延长
     return driver
 
 # ================== 登录 ==================
@@ -91,14 +96,39 @@ def login(driver):
     logging.info("开始登录")
     driver.get("https://vps.polarbear.nyc.mn/index/login/?referer=")
 
-    WebDriverWait(driver, WAIT_TIMEOUT).until(
-        EC.presence_of_element_located((By.NAME, "swapname"))
-    ).send_keys(USERNAME)
+    # 登录输入框重试机制
+    max_login_attempts = 3
+    for attempt in range(1, max_login_attempts + 1):
+        try:
+            WebDriverWait(driver, WAIT_TIMEOUT).until(
+                EC.presence_of_element_located((By.NAME, "swapname"))
+            ).send_keys(USERNAME)
 
-    driver.find_element(By.NAME, "swappass").send_keys(PASSWORD)
-    driver.find_element(By.XPATH, "//button[contains(., '登录') or contains(., 'Login')]").click()
-    WebDriverWait(driver, WAIT_TIMEOUT).until(EC.url_contains("index"))
-    logging.info("登录成功")
+            driver.find_element(By.NAME, "swappass").send_keys(PASSWORD)
+            driver.find_element(By.XPATH, "//button[contains(., '登录') or contains(., 'Login')]").click()
+
+            WebDriverWait(driver, WAIT_TIMEOUT).until(EC.url_contains("index"))
+            logging.info("登录成功")
+            return
+        except TimeoutException:
+            logging.warning(f"⚠️ 第 {attempt} 次尝试登录超时")
+            # 截图调试
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            png = f"/tmp/arcticcloud_login_attempt_{attempt}_{ts}.png"
+            html = f"/tmp/arcticcloud_login_attempt_{attempt}_{ts}.html"
+            try:
+                driver.save_screenshot(png)
+                with open(html, "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+                logging.info(f"已保存登录调试文件：{png} / {html}")
+            except Exception:
+                logging.warning("保存登录调试文件失败（已忽略）", exc_info=True)
+            
+            if attempt < max_login_attempts:
+                logging.info("⏳ 等待 5 秒后重试登录...")
+                time.sleep(5)
+            else:
+                raise TimeoutException("连续多次登录超时，可能网络/证书有问题")
 
 # ================== 打开第一个产品详情 ==================
 def open_first_product_detail(driver):
